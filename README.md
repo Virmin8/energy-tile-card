@@ -1,5 +1,7 @@
 # Energy Tile Card
 
+![Energy Tile Card preview](images/preview.png)
+
 A universal Home Assistant dashboard card for power and energy devices: inverters, solar, batteries, smart plugs, geysers. Each tile has:
 
 - a header with an icon, a name and a **status pill** driven by rules

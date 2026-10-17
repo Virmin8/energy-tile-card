@@ -11,7 +11,7 @@
  * layout from an entity prefix; any key you set overrides the preset.
  */
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 
 // Named status colours: pill [bg, fg] and icon [bg, fg].
 const COLORS = {
