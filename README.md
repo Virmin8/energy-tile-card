@@ -74,7 +74,9 @@ target: number.geyserwise_bedroom_geyser_morning_temperature
 | `name` | string | Title |
 | `icon` | string | Header icon |
 | `icon_color` | `{bg, color}` | Fixed icon colours. When left out, the icon follows the status colour |
-| `scale` | number | Size multiplier for everything (default `1`) |
+| `scale` | number or `auto` | Size multiplier for everything (default `1`). `auto` sizes the tile from its width, so the same card fits a tablet and a desktop |
+| `auto_base` | number | With `scale: auto`: the width in px that counts as scale 1 (default `250`, `333` for `golf_cart`) |
+| `auto_min` / `auto_max` | number | Limits for `scale: auto` (default `0.7` / `2`) |
 | `fill` | boolean | Stretch the tile to the full height of its grid row and spread the content evenly (default `false`) |
 | `popup` | string | Shows a cog button next to the big value that navigates to this path or hash |
 | `status` | list | Status rules, see below |

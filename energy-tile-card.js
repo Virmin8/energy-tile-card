@@ -11,7 +11,7 @@
  * layout from an entity prefix; any key you set overrides the preset.
  */
 
-const VERSION = '1.0.3';
+const VERSION = '1.1.0';
 
 // Named status colours: pill [bg, fg] and icon [bg, fg].
 const COLORS = {
@@ -190,6 +190,7 @@ const PRESETS = {
       name: 'Golf Batteries',
       icon: 'mdi:battery-charging',
       icon_color: { bg: '#DCFCE7', color: '#15803D' },
+      auto_base: 333,
       panels,
       tap_action: { action: 'more-info' },
     };
@@ -257,7 +258,40 @@ class EnergyTileCard extends HTMLElement {
     (cfg.watch || []).forEach((id) => ids.add(id));
     this._ids = [...ids];
     this._html = null;
+    this._observeSize();
     if (this._hass) this._render();
+  }
+
+  connectedCallback() { this._observeSize(); }
+
+  disconnectedCallback() {
+    this._ro?.disconnect();
+    this._ro = null;
+  }
+
+  // scale: auto -> derive the scale from the tile's width, so one config fits
+  // both a wall tablet and a desktop screen.
+  _observeSize() {
+    if (this._config?.scale !== 'auto' || this._ro || !this.isConnected || !window.ResizeObserver) return;
+    this._ro = new ResizeObserver((entries) => {
+      const width = entries[0].contentRect.width;
+      if (!width) return;
+      const c = this._config;
+      const raw = width / (c.auto_base ?? 250);
+      const scale = Math.round(Math.min(Math.max(raw, c.auto_min ?? 0.7), c.auto_max ?? 2) * 20) / 20;
+      if (scale === this._autoScale) return;
+      this._autoScale = scale;
+      this._html = null;
+      this._schedule();
+    });
+    this._ro.observe(this);
+  }
+
+  _scale() {
+    const c = this._config;
+    if (c.scale === 'auto') return this._autoScale ?? 1;
+    const v = parseFloat(c.scale);
+    return Number.isFinite(v) ? v : 1;
   }
 
   set hass(hass) {
@@ -421,7 +455,7 @@ class EnergyTileCard extends HTMLElement {
     if (c.panels) {
       const factor = c.panel_scale ?? 0.8;
       h += `<div class="grid" style="grid-template-columns:repeat(${c.panels.length},1fr);gap:calc(10px*var(--s))">`
-        + c.panels.map((p) => `<div class="col" style="--s:${(c.scale ?? 1) * factor}">${this._body(p, true)}</div>`).join('')
+        + c.panels.map((p) => `<div class="col" style="--s:${this._scale() * factor}">${this._body(p, true)}</div>`).join('')
         + `</div>`;
     }
 
@@ -437,7 +471,7 @@ class EnergyTileCard extends HTMLElement {
   _render() {
     if (!this._config || !this._hass) return;
     const c = this._config;
-    const html = `<ha-card class="${c.fill ? 'fill' : ''}" style="--s:${c.scale ?? 1}"><div class="wrap">${this._body(c, false)}</div></ha-card>`;
+    const html = `<ha-card class="${c.fill ? 'fill' : ''}" style="--s:${this._scale()}"><div class="wrap">${this._body(c, false)}</div></ha-card>`;
     if (html === this._html) return; // nothing visible changed
     this._html = html;
     this._content.innerHTML = html;
@@ -500,7 +534,7 @@ class EnergyTileCard extends HTMLElement {
 // ---------------------------------------------------------------------------
 const LABELS = {
   preset: 'Preset', entity: 'Entity', prefix: 'Entity prefix (e.g. pool_pump)', name: 'Name', icon: 'Icon',
-  scale: 'Scale', popup: 'Cog button pop-up (e.g. #Bedroom)', water_temp: 'Water temperature sensor',
+  scale: 'Scale (number, or auto)', popup: 'Cog button pop-up (e.g. #Bedroom)', water_temp: 'Water temperature sensor',
   target: 'Target temperature entity', count: 'Number of batteries',
   daily: 'Daily energy sensor (optional)', monthly: 'Monthly energy sensor (optional)',
 };
@@ -531,7 +565,7 @@ function editorSchema(preset) {
     { name: 'name', selector: { text: {} } },
     { name: 'icon', selector: { icon: {} } },
     { name: 'popup', selector: { text: {} } },
-    { name: 'scale', selector: { number: { min: 0.5, max: 3, step: 0.1, mode: 'box' } } },
+    { name: 'scale', selector: { text: {} } },
   );
   return schema;
 }
