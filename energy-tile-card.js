@@ -11,7 +11,7 @@
  * layout from an entity prefix; any key you set overrides the preset.
  */
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 // Named status colours: pill [bg, fg] and icon [bg, fg].
 const COLORS = {
@@ -239,20 +239,35 @@ class EnergyTileCard extends HTMLElement {
     this._content.style.height = '100%';
     this._root.appendChild(this._content);
     this._root.addEventListener('click', (ev) => this._onClick(ev));
+    // hold_action: fire after 500 ms; the click that follows is swallowed.
+    this.addEventListener('pointerdown', (ev) => {
+      this._held = false;
+      clearTimeout(this._holdTimer);
+      if (!this._config?.hold_action || ev.composedPath().some((el) => el.dataset?.popup)) return;
+      this._holdTimer = setTimeout(() => { this._held = true; this._action('hold'); }, 500);
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((t) =>
+      this.addEventListener(t, () => clearTimeout(this._holdTimer)));
   }
 
   static getConfigElement() { return document.createElement('energy-tile-card-editor'); }
 
-  static getStubConfig() {
-    return { preset: 'plug', prefix: 'pool_pump', name: 'Pool Pump', icon: 'mdi:pool' };
+  static getStubConfig(hass) {
+    const states = hass?.states || {};
+    const power = Object.keys(states).find((id) => id.startsWith('sensor.') && states[id].attributes?.device_class === 'power') || '';
+    return {
+      name: 'Device',
+      icon: 'mdi:flash',
+      entity: power,
+      status: [{ above: 5, text: 'On', color: 'green' }, { text: 'Idle', color: 'idle' }],
+      value: { entity: power },
+      bar: { max: 3000, color: '#16A34A', left: '0', label: '{pct}%', right: '3 kW' },
+    };
   }
 
   setConfig(config) {
     if (!config) throw new Error('energy-tile-card: invalid configuration');
     const cfg = expandConfig(config);
-    if (!cfg.value && !cfg.rows && !cfg.panels) {
-      throw new Error('energy-tile-card: set a preset, or at least value / rows');
-    }
     this._config = cfg;
     const ids = new Set((JSON.stringify(cfg).match(ENTITY_RE) || []));
     (cfg.watch || []).forEach((id) => ids.add(id));
@@ -326,13 +341,12 @@ class EnergyTileCard extends HTMLElement {
 
   _item(it) {
     let raw;
+    const so = it.entity ? this._hass.states[it.entity] : null;
     if (it.template != null) raw = this._eval(it.template);
-    else {
-      const so = this._hass.states[it.entity];
-      raw = it.attribute ? so?.attributes?.[it.attribute] : so?.state;
-    }
+    else raw = it.attribute ? so?.attributes?.[it.attribute] : so?.state;
     let color = it.color;
-    const unit = it.unit || '';
+    // Unit defaults to the entity's own unit (not for text, templates or attributes).
+    const unit = it.unit ?? (it.text || it.template != null || it.attribute ? '' : so?.attributes?.unit_of_measurement ?? '');
     const missing = raw == null || raw === 'unavailable' || raw === 'unknown' || raw === '';
 
     if (it.map) {
@@ -347,7 +361,10 @@ class EnergyTileCard extends HTMLElement {
     if (!Number.isFinite(v)) return { text: '—', unit: '', color };
     if (it.multiply != null) v *= it.multiply;
     if (it.abs) v = Math.abs(v);
-    const d = it.decimals ?? 0;
+    // Decimals: explicit, else the entity's display precision, else a sensible guess.
+    const d = it.decimals
+      ?? this._hass.entities?.[it.entity]?.display_precision
+      ?? (Number.isInteger(v) || Math.abs(v) >= 100 ? 0 : Math.abs(v) >= 10 ? 1 : 2);
     const text = it.locale
       ? v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
       : v.toFixed(d);
@@ -374,8 +391,8 @@ class EnergyTileCard extends HTMLElement {
     if (r.state != null && ![].concat(r.state).map(String).includes(st)) return false;
     if (r.state_not != null && [].concat(r.state_not).map(String).includes(st)) return false;
     const v = parseFloat(st);
-    if (r.above != null && !(v > r.above)) return false;
-    if (r.below != null && !(v < r.below)) return false;
+    if (r.above != null && r.above !== '' && !(v > Number(r.above))) return false;
+    if (r.below != null && r.below !== '' && !(v < Number(r.below))) return false;
     return true;
   }
 
@@ -388,7 +405,8 @@ class EnergyTileCard extends HTMLElement {
   }
 
   _cell(it, cls) {
-    let html = `<div class="lbl">${esc(it.label ?? '')}</div>${this._val(it, it.small ? 'val sm' : cls)}`;
+    const label = it.label ?? (it.entity ? this._hass.states[it.entity]?.attributes?.friendly_name : '') ?? '';
+    let html = `<div class="lbl">${esc(label)}</div>${this._val(it, it.small ? 'val sm' : cls)}`;
     if (it.sub) {
       const parts = it.sub.map((x) => { const r = this._item(x); return r.text === '—' ? '—' : `${r.text}${r.unit}`; });
       html += `<div class="sub">${esc(parts.join(' '))}</div>`;
@@ -485,7 +503,8 @@ class EnergyTileCard extends HTMLElement {
       this._navigate(cog.dataset.popup);
       return;
     }
-    this._action(this._config.tap_action || { action: 'more-info' });
+    if (this._held) { this._held = false; return; }
+    this._action('tap');
   }
 
   _navigate(path) {
@@ -493,62 +512,110 @@ class EnergyTileCard extends HTMLElement {
     window.dispatchEvent(new CustomEvent('location-changed', { detail: { replace: false } }));
   }
 
-  _action(a) {
-    const hass = this._hass;
-    const entity = a.entity || this._config.entity;
-    switch (a.action) {
-      case 'none':
-        return;
-      case 'navigate':
-        this._navigate(a.navigation_path);
-        return;
-      case 'toggle': {
-        if (!entity) return;
-        if (entity.startsWith('water_heater.')) {
-          const on = hass.states[entity]?.state !== 'off';
-          hass.callService('water_heater', 'set_operation_mode', {
-            entity_id: entity, operation_mode: on ? 'off' : (a.on_mode || 'electric'),
-          });
-        } else {
-          hass.callService('homeassistant', 'toggle', { entity_id: entity });
-        }
-        return;
-      }
-      case 'perform-action':
-      case 'call-service': {
-        const [domain, service] = (a.perform_action || a.service || '').split('.');
-        if (domain && service) hass.callService(domain, service, a.data || a.service_data || {}, a.target);
-        return;
-      }
-      case 'more-info':
-      default:
-        if (entity) {
-          this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: entity }, bubbles: true, composed: true }));
-        }
+  // kind: 'tap' | 'hold'. Uses Home Assistant's own action handler, so every
+  // standard action works (more-info, toggle, perform-action, navigate, url, ...).
+  _action(kind) {
+    const c = this._config;
+    const a = c[`${kind}_action`] || (kind === 'tap' ? { action: 'more-info' } : null);
+    if (!a || a.action === 'none') return;
+    const entity = a.entity || c.entity;
+    // Water heaters have no on/off toggle; switch between a mode and off.
+    if (a.action === 'toggle' && entity?.startsWith('water_heater.')) {
+      const on = this._hass.states[entity]?.state !== 'off';
+      this._hass.callService('water_heater', 'set_operation_mode', {
+        entity_id: entity, operation_mode: on ? 'off' : (a.on_mode || 'electric'),
+      });
+      return;
     }
+    this.dispatchEvent(new CustomEvent('hass-action', {
+      bubbles: true,
+      composed: true,
+      detail: { config: { entity, [`${kind}_action`]: a }, action: kind },
+    }));
   }
 }
 
 // ---------------------------------------------------------------------------
-// Visual editor (preset setup; custom layouts stay in YAML)
+// Visual editor: every part of the tile can be built in the UI.
+// Expressions (if / template), sub-lines, value maps and panels are YAML-only
+// and are kept untouched when you edit other fields.
 // ---------------------------------------------------------------------------
 const LABELS = {
-  preset: 'Preset', entity: 'Entity', prefix: 'Entity prefix (e.g. pool_pump)', name: 'Name', icon: 'Icon',
-  scale: 'Scale (number, or auto)', popup: 'Cog button pop-up (e.g. #Bedroom)', water_temp: 'Water temperature sensor',
-  target: 'Target temperature entity', count: 'Number of batteries',
-  daily: 'Daily energy sensor (optional)', monthly: 'Monthly energy sensor (optional)',
+  name: 'Name', entity: 'Entity', icon: 'Icon', scale: 'Scale (number or auto)', popup: 'Cog button opens (e.g. #popup or /lovelace/1)',
+  fill: 'Stretch to row height', icon_bg: 'Icon background (CSS colour, empty = status colour)', icon_fg: 'Icon colour',
+  label: 'Label', unit: 'Unit (empty = from entity)', decimals: 'Decimals', multiply: 'Multiply by', abs: 'Absolute value',
+  text: 'Show as text', locale: 'Thousands separator', small: 'Smaller text',
+  condition: 'Condition', value: 'Value', color: 'Colour',
+  max: 'Maximum', left: 'Left text', right: 'Right text',
+  tap_action: 'Tap action', hold_action: 'Hold action', split: 'One box with dividers (automatic for 3+ items)',
+  preset: 'Preset', prefix: 'Entity prefix', water_temp: 'Water temperature sensor', target: 'Target temperature entity',
+  count: 'Number of batteries', daily: 'Daily energy sensor (optional)', monthly: 'Monthly energy sensor (optional)',
 };
 
-function editorSchema(preset) {
-  const schema = [
-    { name: 'preset', selector: { select: { mode: 'dropdown', options: [
-      { value: 'custom', label: 'Custom (YAML)' },
-      { value: 'plug', label: 'Smart plug' },
-      { value: 'geyser', label: 'Geyser' },
-      { value: 'dyness_module', label: 'Dyness battery module' },
-      { value: 'golf_cart', label: 'Golf cart batteries' },
+const HELPERS = {
+  label: 'Empty = entity name',
+  scale: '1 = normal size. auto sizes the tile from its width.',
+  popup: 'Shows a cog button next to the main value.',
+};
+
+const grid = (...schema) => ({ type: 'grid', name: '', schema });
+
+const GENERAL_SCHEMA = [
+  { name: 'name', selector: { text: {} } },
+  { name: 'entity', selector: { entity: {} } },
+  grid({ name: 'icon', selector: { icon: {} } }, { name: 'scale', selector: { text: {} } }),
+  grid({ name: 'icon_bg', selector: { text: {} } }, { name: 'icon_fg', selector: { text: {} } }),
+  { name: 'popup', selector: { text: {} } },
+  { name: 'fill', selector: { boolean: {} } },
+];
+
+const ITEM_SCHEMA = [
+  { name: 'entity', selector: { entity: {} } },
+  grid({ name: 'label', selector: { text: {} } }, { name: 'unit', selector: { text: {} } }),
+  grid(
+    { name: 'decimals', selector: { number: { min: 0, max: 4, mode: 'box' } } },
+    { name: 'multiply', selector: { number: { step: 'any', mode: 'box' } } },
+  ),
+  grid({ name: 'abs', selector: { boolean: {} } }, { name: 'text', selector: { boolean: {} } }),
+];
+
+const VALUE_SCHEMA = [
+  { name: 'entity', selector: { entity: {} } },
+  grid({ name: 'unit', selector: { text: {} } }, { name: 'decimals', selector: { number: { min: 0, max: 4, mode: 'box' } } }),
+  grid({ name: 'abs', selector: { boolean: {} } }, { name: 'locale', selector: { boolean: {} } }),
+];
+
+const RULE_SCHEMA = [
+  grid(
+    { name: 'condition', selector: { select: { mode: 'dropdown', options: [
+      { value: 'always', label: 'Always (fallback)' },
+      { value: 'above', label: 'Number above' },
+      { value: 'below', label: 'Number below' },
+      { value: 'equals', label: 'State is' },
+      { value: 'not', label: 'State is not' },
     ] } } },
-  ];
+    { name: 'value', selector: { text: {} } },
+  ),
+  { name: 'entity', selector: { entity: {} } },
+  grid(
+    { name: 'text', selector: { text: {} } },
+    { name: 'color', selector: { select: { mode: 'dropdown', custom_value: true, options: Object.keys(COLORS) } } },
+  ),
+];
+
+const BAR_SCHEMA = [
+  { name: 'entity', selector: { entity: {} } },
+  grid({ name: 'max', selector: { number: { step: 'any', mode: 'box' } } }, { name: 'color', selector: { text: {} } }),
+  grid({ name: 'left', selector: { text: {} } }, { name: 'label', selector: { text: {} } }, { name: 'right', selector: { text: {} } }),
+];
+
+const ACTION_SCHEMA = [
+  { name: 'tap_action', selector: { ui_action: {} } },
+  { name: 'hold_action', selector: { ui_action: {} } },
+];
+
+function presetSchema(preset) {
+  const schema = [];
   if (preset === 'geyser') schema.push({ name: 'entity', selector: { entity: { domain: 'water_heater' } } });
   if (preset === 'dyness_module') schema.push({ name: 'entity', selector: { entity: { domain: 'sensor' } } });
   if (['plug', 'geyser', 'golf_cart'].includes(preset)) schema.push({ name: 'prefix', selector: { text: {} } });
@@ -563,41 +630,329 @@ function editorSchema(preset) {
   }
   schema.push(
     { name: 'name', selector: { text: {} } },
-    { name: 'icon', selector: { icon: {} } },
+    grid({ name: 'icon', selector: { icon: {} } }, { name: 'scale', selector: { text: {} } }),
     { name: 'popup', selector: { text: {} } },
-    { name: 'scale', selector: { text: {} } },
   );
   return schema;
 }
 
+const clone = (o) => JSON.parse(JSON.stringify(o ?? null));
+
+// Drop empty strings / null / undefined so the YAML stays tidy.
+function tidy(obj) {
+  const out = {};
+  Object.entries(obj).forEach(([k, v]) => { if (v !== '' && v != null && v !== false) out[k] = v; });
+  return out;
+}
+
+function ruleToForm(r) {
+  const condition = r.above != null ? 'above' : r.below != null ? 'below' : r.state != null ? 'equals' : r.state_not != null ? 'not' : 'always';
+  const raw = r.above ?? r.below ?? r.state ?? r.state_not;
+  return { condition, value: raw == null ? '' : [].concat(raw).join(', '), entity: r.entity, text: r.text, color: r.color };
+}
+
+function formToRule(f) {
+  const r = tidy({ entity: f.entity, text: f.text, color: f.color });
+  const v = (f.value ?? '').toString().trim();
+  const list = v.split(',').map((x) => x.trim()).filter(Boolean);
+  if (f.condition === 'above' && v !== '') r.above = Number(v);
+  if (f.condition === 'below' && v !== '') r.below = Number(v);
+  if (f.condition === 'equals' && list.length) r.state = list.length === 1 ? list[0] : list;
+  if (f.condition === 'not' && list.length) r.state_not = list.length === 1 ? list[0] : list;
+  return r;
+}
+
+// A rule the form can't represent (expression or several conditions) stays YAML-only.
+const ruleIsAdvanced = (r) => r.if != null || ['above', 'below', 'state', 'state_not'].filter((k) => r[k] != null).length > 1;
+
+const EDITOR_CSS = `
+  .ed { display:flex; flex-direction:column; gap:12px; }
+  ha-expansion-panel { display:block; }
+  .body { display:flex; flex-direction:column; gap:12px; padding:8px 0 12px; }
+  .entry { border:1px solid var(--divider-color); border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:8px; }
+  .entry.row { background:rgba(127,127,127,0.04); }
+  .entry-head { display:flex; align-items:center; gap:6px; font-weight:500; font-size:14px; }
+  .entry-head .grow { flex:1; }
+  .note { font-size:12px; color:var(--secondary-text-color); }
+  .btn { font:inherit; font-size:13px; padding:6px 12px; border-radius:6px; cursor:pointer;
+         border:1px solid var(--divider-color); background:var(--card-background-color, transparent); color:var(--primary-color); }
+  .btn.icon { padding:2px 8px; color:var(--secondary-text-color); }
+  .btn.danger { color:var(--error-color, #db4437); }
+  .btn.primary { background:var(--primary-color); color:var(--text-primary-color, #fff); border-color:var(--primary-color); }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; }
+`;
+
 class EnergyTileCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this._open = new Set(['general']);
+    this._forms = [];
+  }
+
   setConfig(config) {
-    this._config = { ...config };
+    // Our own change coming back: keep the DOM (and keyboard focus) and the
+    // config object the open forms are editing.
+    if (this._emitted && JSON.stringify(config) === this._emitted) return;
+    this._config = clone(config);
     this._render();
   }
 
   set hass(hass) {
     this._hass = hass;
-    if (this._form) this._form.hass = hass;
+    this._forms.forEach((f) => { f.hass = hass; });
+  }
+
+  // -- plumbing -------------------------------------------------------------
+  _emit(rerender = false) {
+    this._emitted = JSON.stringify(this._config);
+    this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: clone(this._config) }, bubbles: true, composed: true }));
+    if (rerender) this._render();
+  }
+
+  _form(schema, data, onChange) {
+    const f = document.createElement('ha-form');
+    f.hass = this._hass;
+    f.schema = schema;
+    f.data = data;
+    f.computeLabel = (s) => LABELS[s.name] ?? s.name;
+    f.computeHelper = (s) => HELPERS[s.name];
+    f.addEventListener('value-changed', (ev) => { ev.stopPropagation(); f.data = ev.detail.value; onChange(ev.detail.value); });
+    this._forms.push(f);
+    return f;
+  }
+
+  _btn(text, onClick, cls = '') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `btn ${cls}`;
+    b.textContent = text;
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); onClick(); });
+    return b;
+  }
+
+  _el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  _panel(key, title, children) {
+    const p = document.createElement('ha-expansion-panel');
+    p.header = title;
+    p.outlined = true;
+    p.expanded = this._open.has(key);
+    p.addEventListener('expanded-changed', (ev) => {
+      if (ev.detail.expanded) this._open.add(key); else this._open.delete(key);
+    });
+    const body = this._el('div', 'body');
+    children.filter(Boolean).forEach((c) => body.append(c));
+    p.append(body);
+    return p;
+  }
+
+  // Header for a list entry: title + move up/down + delete.
+  _entryHead(title, list, index, rerender) {
+    const head = this._el('div', 'entry-head');
+    head.append(this._el('span', 'grow', title));
+    if (index > 0) head.append(this._btn('↑', () => { [list[index - 1], list[index]] = [list[index], list[index - 1]]; this._emit(true); }, 'icon'));
+    if (index < list.length - 1) head.append(this._btn('↓', () => { [list[index + 1], list[index]] = [list[index], list[index + 1]]; this._emit(true); }, 'icon'));
+    head.append(this._btn('✕', () => { list.splice(index, 1); rerender(); }, 'icon danger'));
+    return head;
+  }
+
+  // -- sections -------------------------------------------------------------
+  _itemEntry(list, index, title) {
+    const it = list[index];
+    const entry = this._el('div', 'entry');
+    entry.append(this._entryHead(title, list, index, () => this._emit(true)));
+    const form = this._form(ITEM_SCHEMA, it, (v) => {
+      const cur = list[index];
+      const keep = {};
+      ['template', 'sub', 'map', 'attribute', 'color', 'capitalize', 'small', 'locale'].forEach((k) => { if (cur[k] != null) keep[k] = cur[k]; });
+      list[index] = { ...tidy(v), ...keep };
+      this._emit();
+    });
+    entry.append(form);
+    if (it.template != null || it.sub || it.map) entry.append(this._el('div', 'note', 'Has YAML-only options (template / sub / map); they are kept.'));
+    return entry;
+  }
+
+  _statusSection(c) {
+    c.status = c.status || [];
+    const list = c.status;
+    const els = [this._el('div', 'note', 'Rules are checked top to bottom; the first one that matches sets the pill text and colour. "Entity" defaults to the card entity.')];
+    list.forEach((r, i) => {
+      const entry = this._el('div', 'entry');
+      entry.append(this._entryHead(`Rule ${i + 1}`, list, i, () => this._emit(true)));
+      if (ruleIsAdvanced(r)) {
+        entry.append(this._el('div', 'note', `Advanced rule (edit in YAML): ${r.if ?? JSON.stringify(r)}`));
+      } else {
+        entry.append(this._form(RULE_SCHEMA, ruleToForm(r), (v) => { list[i] = formToRule(v); this._emit(); }));
+      }
+      els.push(entry);
+    });
+    els.push(this._el('div', 'actions'));
+    els[els.length - 1].append(this._btn('+ Add rule', () => {
+      list.push({ text: 'On', color: 'green' });
+      this._open.add('status');
+      this._emit(true);
+    }));
+    return this._panel('status', 'Status pill', els);
+  }
+
+  _valueSection(c) {
+    const els = [];
+    if (c.value) {
+      els.push(this._form(VALUE_SCHEMA, c.value, (v) => {
+        const keep = {};
+        ['template', 'map', 'attribute', 'color', 'multiply', 'text'].forEach((k) => { if (c.value[k] != null) keep[k] = c.value[k]; });
+        c.value = { ...tidy(v), ...keep };
+        this._emit();
+      }));
+      els.push(this._el('div', 'actions'));
+      els[els.length - 1].append(this._btn('Remove main value', () => { delete c.value; this._emit(true); }, 'danger'));
+    } else {
+      els.push(this._el('div', 'actions'));
+      els[0].append(this._btn('+ Add main value', () => { c.value = { entity: c.entity || '' }; this._open.add('value'); this._emit(true); }));
+    }
+    return this._panel('value', 'Main value', els);
+  }
+
+  _barSection(c) {
+    const els = [];
+    if (c.bar) {
+      els.push(this._el('div', 'note', 'Entity defaults to the main value. Use {pct} in the label for the percentage.'));
+      els.push(this._form(BAR_SCHEMA, c.bar, (v) => {
+        const keep = {};
+        ['template', 'label_entity', 'label_suffix', 'label_decimals'].forEach((k) => { if (c.bar[k] != null) keep[k] = c.bar[k]; });
+        c.bar = { ...tidy(v), ...keep };
+        this._emit();
+      }));
+      els.push(this._el('div', 'actions'));
+      els[els.length - 1].append(this._btn('Remove bar', () => { delete c.bar; this._emit(true); }, 'danger'));
+    } else {
+      els.push(this._el('div', 'actions'));
+      els[0].append(this._btn('+ Add bar', () => {
+        c.bar = { max: 100, color: '#16A34A', left: '0', label: '{pct}%', right: '100' };
+        this._open.add('bar');
+        this._emit(true);
+      }));
+    }
+    return this._panel('bar', 'Progress bar', els);
+  }
+
+  _rowsSection(c) {
+    c.rows = c.rows || [];
+    const rows = c.rows;
+    const els = [this._el('div', 'note', 'Each row shows its items side by side. 2 items = separate boxes; 3 or more = one box with dividers.')];
+    rows.forEach((row, ri) => {
+      const isObj = !Array.isArray(row);
+      const items = isObj ? (row.items = row.items || []) : row;
+      const box = this._el('div', 'entry row');
+      box.append(this._entryHead(`Row ${ri + 1}`, rows, ri, () => this._emit(true)));
+      box.append(this._form([{ name: 'split', selector: { boolean: {} } }], { split: isObj && !!row.split }, (v) => {
+        rows[ri] = v.split ? { split: true, items } : items;
+        this._emit();
+      }));
+      items.forEach((_, ii) => box.append(this._itemEntry(items, ii, `Item ${ii + 1}`)));
+      const act = this._el('div', 'actions');
+      act.append(this._btn('+ Add item', () => { items.push({ entity: '' }); this._emit(true); }));
+      box.append(act);
+      els.push(box);
+    });
+    const act = this._el('div', 'actions');
+    act.append(this._btn('+ Add row', () => { rows.push([{ entity: '' }, { entity: '' }]); this._open.add('rows'); this._emit(true); }));
+    els.push(act);
+    return this._panel('rows', 'Stat rows', els);
+  }
+
+  _footerSection(c) {
+    c.footer = c.footer || [];
+    const list = c.footer;
+    const els = [this._el('div', 'note', 'Shown under a divider at the bottom, usually Today / Month.')];
+    list.forEach((_, i) => els.push(this._itemEntry(list, i, `Footer item ${i + 1}`)));
+    const act = this._el('div', 'actions');
+    act.append(this._btn('+ Add footer item', () => { list.push({ entity: '' }); this._open.add('footer'); this._emit(true); }));
+    els.push(act);
+    return this._panel('footer', 'Footer', els);
+  }
+
+  _generalSection(c) {
+    const data = { ...c, icon_bg: c.icon_color?.bg, icon_fg: c.icon_color?.color, scale: c.scale != null ? String(c.scale) : undefined };
+    const form = this._form(GENERAL_SCHEMA, data, (v) => {
+      const next = tidy(v);
+      ['name', 'entity', 'icon', 'popup', 'fill'].forEach((k) => { if (next[k] != null && next[k] !== false) c[k] = next[k]; else delete c[k]; });
+      if (next.scale != null) c.scale = next.scale === 'auto' || Number.isNaN(Number(next.scale)) ? next.scale : Number(next.scale); else delete c.scale;
+      if (next.icon_bg || next.icon_fg) c.icon_color = tidy({ bg: next.icon_bg, color: next.icon_fg }); else delete c.icon_color;
+      this._emit();
+    });
+    return this._panel('general', 'General', [form]);
+  }
+
+  _actionsSection(c) {
+    const form = this._form(ACTION_SCHEMA, { tap_action: c.tap_action, hold_action: c.hold_action }, (v) => {
+      ['tap_action', 'hold_action'].forEach((k) => { if (v[k]) c[k] = v[k]; else delete c[k]; });
+      this._emit();
+    });
+    return this._panel('actions', 'Tap & hold actions', [form]);
+  }
+
+  _presetSection(c) {
+    const els = [
+      this._el('div', 'note', `This card uses the "${c.preset}" preset, which fills in the layout from an entity naming pattern.`),
+      this._form(presetSchema(c.preset), { ...c, scale: c.scale != null ? String(c.scale) : undefined }, (v) => {
+        const next = tidy(v);
+        if (next.scale != null && next.scale !== 'auto' && !Number.isNaN(Number(next.scale))) next.scale = Number(next.scale);
+        this._config = { type: c.type, preset: c.preset, ...next };
+        this._emit();
+      }),
+    ];
+    if (c.preset !== 'golf_cart') {
+      const act = this._el('div', 'actions');
+      act.append(this._btn('Convert to fully editable card', () => {
+        const full = expandConfig(c);
+        ['preset', 'prefix', 'water_temp', 'target', 'daily', 'monthly', 'count'].forEach((k) => delete full[k]);
+        this._config = { type: c.type, ...full };
+        this._open = new Set(['general']);
+        this._emit(true);
+      }, 'primary'));
+      els.push(act);
+    } else {
+      els.push(this._el('div', 'note', 'Side-by-side panels are edited in YAML.'));
+    }
+    return this._panel('preset', 'Preset', els);
   }
 
   _render() {
-    if (!this._form) {
-      this._form = document.createElement('ha-form');
-      this._form.computeLabel = (s) => LABELS[s.name] ?? s.name;
-      this._form.addEventListener('value-changed', (ev) => {
-        const cfg = { ...this._config, ...ev.detail.value };
-        Object.keys(cfg).forEach((k) => { if (cfg[k] === '' || cfg[k] == null) delete cfg[k]; });
-        if (cfg.preset === 'custom') delete cfg.preset;
-        this._config = cfg;
-        this._form.schema = editorSchema(cfg.preset);
-        this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: cfg }, bubbles: true, composed: true }));
-      });
-      this.appendChild(this._form);
+    if (!this._config) return;
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: 'open' });
+      const style = document.createElement('style');
+      style.textContent = EDITOR_CSS;
+      this.shadowRoot.append(style);
     }
-    this._form.hass = this._hass;
-    this._form.data = { ...this._config, preset: this._config.preset || 'custom' };
-    this._form.schema = editorSchema(this._config.preset);
+    this._forms = [];
+    this.shadowRoot.querySelector('.ed')?.remove();
+    const root = this._el('div', 'ed');
+    const c = this._config;
+    if (c.preset) {
+      this._open.add('preset');
+      root.append(this._presetSection(c));
+      root.append(this._actionsSection(c));
+    } else {
+      root.append(
+        this._generalSection(c),
+        this._statusSection(c),
+        this._valueSection(c),
+        this._barSection(c),
+        this._rowsSection(c),
+        this._footerSection(c),
+        this._actionsSection(c),
+      );
+      if (c.panels) root.append(this._el('div', 'note', 'This card has side-by-side panels; edit those in YAML.'));
+    }
+    this.shadowRoot.append(root);
   }
 }
 

@@ -2,7 +2,7 @@
 
 ![Energy Tile Card preview](images/preview.png)
 
-A universal Home Assistant dashboard card for power and energy devices: inverters, solar, batteries, smart plugs, geysers. Each tile has:
+A universal Home Assistant dashboard card for any power or energy device: inverters, solar, batteries, smart plugs, heaters, EV chargers. It works with any sensors and is built entirely in the visual editor. Each tile has:
 
 - a header with an icon, a name and a **status pill** driven by rules
 - one **big value**, with an optional cog button that opens a pop-up (for example a bubble-card `#hash`)
@@ -10,7 +10,7 @@ A universal Home Assistant dashboard card for power and energy devices: inverter
 - **rows of stat boxes**, as separate boxes or one split box
 - a **Today / Month footer**
 
-Ready-made **presets** cover smart plugs, geysers, Dyness battery modules and golf-cart battery pairs, so most cards need only a few lines. Every part can also be configured by hand.
+Pick your sensors in the editor and the card fills in the rest. Units come from the sensor, labels default to the entity name, and decimals follow the sensor's display precision.
 
 The card is plain JavaScript with no dependencies. It redraws only when one of its own entities changes, and all tiles on a page share one stylesheet, so it stays light on wall tablets.
 
@@ -29,19 +29,44 @@ HACS adds the dashboard resource for you.
 1. Copy `energy-tile-card.js` to `/config/www/`.
 2. Go to **Settings → Dashboards → ⋮ → Resources** and add `/local/energy-tile-card.js` as a **JavaScript module**.
 
-## Quick start
+## Quick start (UI)
+
+1. Edit your dashboard, choose **Add card**, and pick **Energy Tile Card**. It starts with your first power sensor.
+2. Use the editor sections to build the tile:
+   - **General**: name, icon, main entity, scale (`auto` fits any screen), and an optional cog button.
+   - **Status pill**: rules such as "power above 100 → *Heating*, red", checked top to bottom.
+   - **Main value**: the big number.
+   - **Progress bar**: entity, maximum, colour and text.
+   - **Stat rows**: add rows and pick a sensor for each box.
+   - **Footer**: usually Today / Month energy.
+   - **Tap & hold actions**: any standard Home Assistant action (more-info, toggle, perform action, navigate, URL).
+
+The same thing in YAML:
 
 ```yaml
 type: custom:energy-tile-card
-preset: plug
-prefix: pool_pump          # -> switch.pool_pump_pool_pump, sensor.pool_pump_pool_pump_power, ...
-name: Pool Pump
-icon: mdi:pool
+name: Heater
+icon: mdi:radiator
+entity: switch.heater
+scale: auto
+status:
+  - { entity: sensor.heater_power, above: 100, text: Heating, color: red }
+  - { state: 'on', text: 'On', color: yellow }
+  - { text: 'Off', color: 'off' }
+value: { entity: sensor.heater_power }
+bar: { max: 3000, color: '#DC2626', left: '0', label: '{pct}%', right: '3 kW' }
+rows:
+  - - { entity: sensor.heater_voltage, label: Volts }
+    - { entity: sensor.heater_current, label: Amps, decimals: 2 }
+footer:
+  - { entity: sensor.heater_energy_today, label: Today }
+  - { entity: sensor.heater_energy_month, label: Month }
+tap_action: { action: toggle }
 ```
 
-The card also appears as **Energy Tile Card** in the card picker, and the visual editor covers the presets.
+## Naming presets (optional)
 
-## Presets
+Presets build a whole tile from an entity naming pattern. They suit devices whose integrations name sensors in a predictable way. In the editor, **Convert to fully editable card** turns a preset into a normal card that you can change part by part.
 
 | Preset | Required | Entities it uses |
 |---|---|---|
@@ -86,7 +111,8 @@ target: number.geyserwise_bedroom_geyser_morning_temperature
 | `footer` | list | Two items for the bottom row |
 | `panels` | list | Sub-tiles shown side by side, each with its own `name`, `status`, `value`, `bar`, `rows` and `footer` |
 | `panel_scale` | number | Panel size relative to `scale` (default `0.8`) |
-| `tap_action` | action | `more-info` (default), `toggle`, `perform-action`, `navigate`, `none` |
+| `tap_action` | action | Any standard Home Assistant action (default `more-info`). `toggle` on a `water_heater` switches between `on_mode` (default `electric`) and off |
+| `hold_action` | action | Any standard Home Assistant action, after a 500 ms press |
 | `watch` | list | Extra entity IDs that should trigger a redraw |
 
 ### Items
@@ -96,8 +122,8 @@ The big value, row cells and footer cells all accept the same item settings:
 | Key | Description |
 |---|---|
 | `entity` / `attribute` | Where the value comes from |
-| `template` | A JavaScript expression instead of an entity, for example `"s('sensor.v') * s('sensor.a')"` |
-| `label`, `unit`, `decimals` | Display settings |
+| `template` | A JavaScript expression instead of an entity, for example `"s('sensor.v') * s('sensor.a')"` (YAML only) |
+| `label`, `unit`, `decimals` | Display settings. By default the label is the entity name, the unit is the entity's unit, and decimals follow the display precision |
 | `abs`, `multiply` | Number transforms |
 | `locale` | Thousands separators |
 | `text: true` | Show the raw state as text |
