@@ -11,7 +11,7 @@
  * layout from an entity prefix; any key you set overrides the preset.
  */
 
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 
 // Named status colours: pill [bg, fg] and icon [bg, fg].
 const COLORS = {
@@ -27,8 +27,10 @@ const COLORS = {
 
 const CSS = `
   :host { display:block; height:100%; }
-  ha-card { height:100%; display:flex; flex-direction:column; overflow:hidden; cursor:pointer; -webkit-tap-highlight-color:transparent; }
-  .wrap  { flex:1; display:flex; flex-direction:column; justify-content:space-between; box-sizing:border-box; gap:calc(6px*var(--s)); padding:calc(8px*var(--s)); }
+  ha-card { overflow:hidden; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  ha-card.fill { height:100%; display:flex; flex-direction:column; }
+  .wrap  { display:flex; flex-direction:column; box-sizing:border-box; gap:calc(6px*var(--s)); padding:calc(8px*var(--s)); }
+  .fill .wrap { flex:1; justify-content:space-between; }
   .col   { display:flex; flex-direction:column; gap:calc(5px*var(--s)); min-width:0; }
   .row   { display:flex; align-items:center; justify-content:space-between; gap:calc(4px*var(--s)); min-width:0; }
   .hdr   { display:flex; align-items:center; gap:calc(6px*var(--s)); min-width:0; }
@@ -435,7 +437,7 @@ class EnergyTileCard extends HTMLElement {
   _render() {
     if (!this._config || !this._hass) return;
     const c = this._config;
-    const html = `<ha-card style="--s:${c.scale ?? 1}"><div class="wrap">${this._body(c, false)}</div></ha-card>`;
+    const html = `<ha-card class="${c.fill ? 'fill' : ''}" style="--s:${c.scale ?? 1}"><div class="wrap">${this._body(c, false)}</div></ha-card>`;
     if (html === this._html) return; // nothing visible changed
     this._html = html;
     this._content.innerHTML = html;

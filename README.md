@@ -75,6 +75,7 @@ target: number.geyserwise_bedroom_geyser_morning_temperature
 | `icon` | string | Header icon |
 | `icon_color` | `{bg, color}` | Fixed icon colours. When left out, the icon follows the status colour |
 | `scale` | number | Size multiplier for everything (default `1`) |
+| `fill` | boolean | Stretch the tile to the full height of its grid row and spread the content evenly (default `false`) |
 | `popup` | string | Shows a cog button next to the big value that navigates to this path or hash |
 | `status` | list | Status rules, see below |
 | `value` | item | The big number |
