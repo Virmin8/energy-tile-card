@@ -11,7 +11,7 @@
  * layout from an entity prefix; any key you set overrides the preset.
  */
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 
 // Named status colours: pill [bg, fg] and icon [bg, fg].
 const COLORS = {
@@ -27,8 +27,8 @@ const COLORS = {
 
 const CSS = `
   :host { display:block; height:100%; }
-  ha-card { height:100%; overflow:hidden; cursor:pointer; -webkit-tap-highlight-color:transparent; }
-  .wrap  { display:flex; flex-direction:column; box-sizing:border-box; gap:calc(6px*var(--s)); padding:calc(8px*var(--s)); }
+  ha-card { height:100%; display:flex; flex-direction:column; overflow:hidden; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .wrap  { flex:1; display:flex; flex-direction:column; justify-content:space-between; box-sizing:border-box; gap:calc(6px*var(--s)); padding:calc(8px*var(--s)); }
   .col   { display:flex; flex-direction:column; gap:calc(5px*var(--s)); min-width:0; }
   .row   { display:flex; align-items:center; justify-content:space-between; gap:calc(4px*var(--s)); min-width:0; }
   .hdr   { display:flex; align-items:center; gap:calc(6px*var(--s)); min-width:0; }
@@ -104,7 +104,7 @@ const PRESETS = {
         { entity: `sensor.${d}_voltage`, label: '🔌 Volts', unit: 'V' },
         { entity: `sensor.${d}_current`, label: '⚙️ Amps', unit: 'A', decimals: 2 },
       ]],
-      footer: [today(`sensor.${d}_daily_energy`), month(`sensor.${p}_total_monthly_energy`)],
+      footer: [today(c.daily || `sensor.${d}_daily_energy`), month(c.monthly || `sensor.${p}_total_monthly_energy`)],
       tap_action: { action: 'toggle' },
     };
   },
@@ -130,7 +130,7 @@ const PRESETS = {
           { entity: c.target, label: '🎯 Target Temp', unit: '°C' },
         ] },
       ],
-      footer: [today(`sensor.${d}_daily_energy`), month(`sensor.${p}_total_monthly_energy`)],
+      footer: [today(c.daily || `sensor.${d}_daily_energy`), month(c.monthly || `sensor.${p}_total_monthly_energy`)],
       tap_action: { action: 'toggle' },
     };
   },
@@ -500,6 +500,7 @@ const LABELS = {
   preset: 'Preset', entity: 'Entity', prefix: 'Entity prefix (e.g. pool_pump)', name: 'Name', icon: 'Icon',
   scale: 'Scale', popup: 'Cog button pop-up (e.g. #Bedroom)', water_temp: 'Water temperature sensor',
   target: 'Target temperature entity', count: 'Number of batteries',
+  daily: 'Daily energy sensor (optional)', monthly: 'Monthly energy sensor (optional)',
 };
 
 function editorSchema(preset) {
@@ -520,6 +521,10 @@ function editorSchema(preset) {
     schema.push({ name: 'target', selector: { entity: {} } });
   }
   if (preset === 'golf_cart') schema.push({ name: 'count', selector: { number: { min: 1, max: 4, mode: 'box' } } });
+  if (preset === 'plug' || preset === 'geyser') {
+    schema.push({ name: 'daily', selector: { entity: { domain: 'sensor' } } });
+    schema.push({ name: 'monthly', selector: { entity: { domain: 'sensor' } } });
+  }
   schema.push(
     { name: 'name', selector: { text: {} } },
     { name: 'icon', selector: { icon: {} } },

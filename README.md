@@ -50,6 +50,8 @@ The card also appears as **Energy Tile Card** in the card picker, and the visual
 | `dyness_module` | `entity` (`sensor.dyness_module_<id>_state_of_charge`) | `sensor.dyness_module_<id>_voltage / _current / _cell_voltage_max / _cell_voltage_min / _cell_voltage_spread` |
 | `golf_cart` | `prefix` (default `golf_cart_battery`), `count` (default 2) | `sensor.<prefix>_<n>_soc / _power / _voltage / _current / _cell_volt_max / _cell_volt_min / _cell_volt_delta / _num_cycles / _charge_daily / _discharge_daily` |
 
+`plug` and `geyser` also take `daily:` and `monthly:` to point the footer at differently named energy sensors.
+
 Any key you set overrides the preset. For example, add `bar: { max: 2000, ... }` to change a plug's scale.
 
 ```yaml
